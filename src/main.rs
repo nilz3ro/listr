@@ -5,9 +5,9 @@ use listr::print_usage;
 // TODO bring in env vars for LISTR_INTERACTIVE;
 
 fn main() {
-    let _args = listr::count_and_collect_args(env::args()).unwrap_or_else(|err| {
-        println!("Error: {}", err);
+    if let Err(e) = listr::run(env::args()) {
+        eprintln!("Error: {}", e);
         print_usage();
         process::exit(1);
-    });
+    };
 }
