@@ -1,8 +1,8 @@
+use listr::print_usage;
 use std::env;
 use std::process;
-
-use listr::print_usage;
-// TODO bring in env vars for LISTR_INTERACTIVE;
+// TODO: add interactive mode.
+// TODO: bring in env vars for LISTR_INTERACTIVE;
 
 fn main() {
     if let Err(e) = listr::run(env::args()) {

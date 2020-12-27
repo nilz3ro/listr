@@ -1,5 +1,8 @@
-use std::env;
+use std::collections::HashMap;
 use std::error::Error;
+use std::fs::File;
+use std::io::prelude::*;
+use std::{env, io::ErrorKind};
 
 #[derive(Debug, PartialEq)]
 enum Command {
@@ -13,10 +16,10 @@ enum Command {
 
 pub fn run(args: env::Args) -> Result<(), Box<dyn Error>> {
     let counted_args = count_and_collect_args(args)?;
-    // TODO: Figure out how to pass this as an error to the top level.
-    let command = validate_command(counted_args).expect("Invalid command");
+    // TODO: Figure out how to pass this as an error to caller using '?'.
+    let command = validate_command(counted_args)?;
 
-    println!("command parsed: {:?}", command);
+    handle_command(command)?;
 
     Ok(())
 }
@@ -38,15 +41,15 @@ where
     }
 }
 
-fn validate_command(args: Vec<String>) -> Option<Command> {
+fn validate_command(args: Vec<String>) -> Result<Command, &'static str> {
     let mut args = args.into_iter();
 
     let first_arg = match &args.next().unwrap()[..] {
-        "help" => return Some(Command::Help),
+        "help" => return Ok(Command::Help),
         "add" => Some("add"),
         "remove" => Some("remove"),
         "show" => Some("show"),
-        _ => return None,
+        _ => return Err("Invalid Argument."),
     };
 
     // we definitely have a valid command now.
@@ -56,32 +59,119 @@ fn validate_command(args: Vec<String>) -> Option<Command> {
     // find out if there's a list name.
     let list_name = match args.next() {
         Some(list) => list,
-        None => return None,
+        None => return Err("Please supply a list name."),
     };
+
+    // TODO: Fix code smell. find a way to match the argument
+    // once and build comands from there.
 
     // if there's an item add it to the list.
     if let Some(item_name) = args.next() {
         match add_remove_or_show {
-            "add" => return Some(Command::AddItemToList(list_name, item_name)),
-            "remove" => return Some(Command::RemoveItemFromList(list_name, item_name)),
-            "show" | _ => return None,
+            "add" => return Ok(Command::AddItemToList(list_name, item_name)),
+            "remove" => return Ok(Command::RemoveItemFromList(list_name, item_name)),
+            "show" | _ => return Err("Show only takes one argument: <list>."),
         }
     }
 
     // just add the list.
     match add_remove_or_show {
-        "add" => Some(Command::AddList(list_name)),
-        "remove" => Some(Command::RemoveList(list_name)),
-        "show" => Some(Command::ShowList(list_name)),
-        _ => None,
+        "add" => Ok(Command::AddList(list_name)),
+        "remove" => Ok(Command::RemoveList(list_name)),
+        "show" => Ok(Command::ShowList(list_name)),
+        _ => Err("Invalid argument."),
+    }
+}
+
+fn handle_command(command: Command) -> Result<(), Box<dyn Error>> {
+    match command {
+        Command::Help => {
+            print_usage();
+            Ok(())
+        }
+        Command::ShowList(list) => show_list(list),
+        Command::AddList(list) => add_list(list),
+        Command::AddItemToList(list, item) => {
+            println!("AddItemToList list: {}, item:{}", list, item);
+            Ok(())
+        }
+        Command::RemoveList(list) => {
+            println!("RemoveList: {}", list);
+            Ok(())
+        }
+        Command::RemoveItemFromList(list, item) => {
+            println!("RemoveItemFromList: list: {}, item: {}", list, item);
+            Ok(())
+        }
+    }
+}
+
+fn ensure_db_file_exists() -> Result<(), std::io::Error> {
+    // TODO: make sure the db file defaults to the user's home dir.
+    // TODO: read an environment variable that lets the user control
+    // the path to the db file.
+    match File::open("./listr_db.json") {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            if e.kind() == ErrorKind::NotFound {
+                // create the file
+                let mut f = File::create("./listr_db.json")?;
+                // add empty json object.
+                f.write(b"{}")?;
+                Ok(())
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
+fn add_list(list: String) -> Result<(), Box<dyn Error>> {
+    ensure_db_file_exists()?;
+
+    let mut file = File::open("./listr_db.json")?;
+    let mut contents = String::new();
+
+    file.read_to_string(&mut contents)?;
+
+    let mut list_map: HashMap<String, Vec<String>> = serde_json::from_str(&contents)?;
+
+    list_map.insert(list, vec![]);
+
+    let output = serde_json::to_string(&list_map)?;
+    let mut file = File::create("./listr_db.json")?;
+
+    file.write(output.as_bytes())?;
+
+    Ok(())
+}
+
+fn show_list(list: String) -> Result<(), Box<dyn Error>> {
+    ensure_db_file_exists()?;
+
+    let mut file = File::open("./listr_db.json")?;
+    let mut contents = String::new();
+
+    file.read_to_string(&mut contents)?;
+
+    let list_map: HashMap<String, Vec<String>> = serde_json::from_str(&contents)?;
+
+    match list_map.get(&list) {
+        Some(list_contents) => {
+            println!("{}: {:?}", list,  list_contents);
+            Ok(())
+        }
+        None => {
+            println!("no list named '{}' exists", list);
+            Ok(())
+        }
     }
 }
 
 pub fn print_usage() {
     let usage = "\nlistr usage:          
 
-add <list>                 Adds a list.
-remove <list>              Removes a list.
+add <list>                 Adds a listremove <list>              Removes a list.
 show <list>                Prints a list to the console.
 add <list> <item>          Adds a new item to a list.
 remove <list> <item>       Removes an item from a list.
@@ -165,7 +255,7 @@ mod test {
             let args = vec![String::from("sandwich")];
             let result = validate_command(args);
 
-            assert_eq!(result.is_none(), true);
+            assert_eq!(result.is_err(), true);
         }
         #[test]
         fn help() {
@@ -179,7 +269,7 @@ mod test {
             let args = vec![String::from("add")];
             let result = validate_command(args);
 
-            assert_eq!(result.is_none(), true);
+            assert_eq!(result.is_err(), true);
         }
 
         #[test]
