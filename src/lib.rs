@@ -8,6 +8,7 @@ use std::{env, io::ErrorKind};
 enum Command {
     AddList(String),
     RemoveList(String),
+    ShowLists,
     ShowList(String),
     AddItemToList(String, String),
     RemoveItemFromList(String, String),
@@ -59,7 +60,12 @@ fn validate_command(args: Vec<String>) -> Result<Command, &'static str> {
     // find out if there's a list name.
     let list_name = match args.next() {
         Some(list) => list,
-        None => return Err("Please supply a list name."),
+        None => {
+            if &add_remove_or_show[..] == "show" {
+                return Ok(Command::ShowLists);
+            }
+            return Err("Please supply a list name.");
+        }
     };
 
     // TODO: Fix code smell. find a way to match the argument
@@ -70,7 +76,7 @@ fn validate_command(args: Vec<String>) -> Result<Command, &'static str> {
         match add_remove_or_show {
             "add" => return Ok(Command::AddItemToList(list_name, item_name)),
             "remove" => return Ok(Command::RemoveItemFromList(list_name, item_name)),
-            "show" | _ => return Err("Show only takes one argument: <list>."),
+            "show" | _ => return Err("Too many arguments supplied."),
         }
     }
 
@@ -85,22 +91,14 @@ fn validate_command(args: Vec<String>) -> Result<Command, &'static str> {
 
 fn handle_command(command: Command) -> Result<(), Box<dyn Error>> {
     match command {
+        Command::ShowList(list) => show_list(list),
+        Command::ShowLists => show_lists(),
+        Command::AddList(list) => add_list(list),
+        Command::AddItemToList(list, item) => add_item_to_list(list, item),
+        Command::RemoveList(list) => remove_list(list),
+        Command::RemoveItemFromList(list, item) => remove_item_from_list(list, item),
         Command::Help => {
             print_usage();
-            Ok(())
-        }
-        Command::ShowList(list) => show_list(list),
-        Command::AddList(list) => add_list(list),
-        Command::AddItemToList(list, item) => {
-            println!("AddItemToList list: {}, item:{}", list, item);
-            Ok(())
-        }
-        Command::RemoveList(list) => {
-            println!("RemoveList: {}", list);
-            Ok(())
-        }
-        Command::RemoveItemFromList(list, item) => {
-            println!("RemoveItemFromList: list: {}, item: {}", list, item);
             Ok(())
         }
     }
@@ -158,7 +156,12 @@ fn show_list(list: String) -> Result<(), Box<dyn Error>> {
 
     match list_map.get(&list) {
         Some(list_contents) => {
-            println!("{}: {:?}", list,  list_contents);
+            println!("{}:", list);
+
+            for item in list_contents {
+                println!("  {}", item);
+            }
+
             Ok(())
         }
         None => {
@@ -168,12 +171,109 @@ fn show_list(list: String) -> Result<(), Box<dyn Error>> {
     }
 }
 
-pub fn print_usage() {
-    let usage = "\nlistr usage:          
+fn show_lists() -> Result<(), Box<dyn Error>> {
+    ensure_db_file_exists()?;
 
-add <list>                 Adds a listremove <list>              Removes a list.
-show <list>                Prints a list to the console.
+    let mut file = File::open("./listr_db.json")?;
+    let mut contents = String::new();
+
+    file.read_to_string(&mut contents)?;
+
+    let list_map: HashMap<String, Vec<String>> = serde_json::from_str(&contents)?;
+
+    // TODO: make this less disgusting...
+    for (list_name, list_contents) in list_map.iter() {
+        println!("{}:", list_name);
+
+        for item in list_contents {
+            println!(" {}", item);
+        }
+
+        println!("");
+    }
+
+    Ok(())
+}
+
+fn add_item_to_list(list: String, item: String) -> Result<(), Box<dyn Error>> {
+    ensure_db_file_exists()?;
+
+    let mut file = File::open("./listr_db.json")?;
+    let mut contents = String::new();
+
+    file.read_to_string(&mut contents)?;
+
+    let mut list_map: HashMap<String, Vec<String>> = serde_json::from_str(&contents)?;
+    let entry = list_map.entry(list).or_insert(vec![]);
+
+    entry.extend(vec![item]);
+
+    let output = serde_json::to_string(&list_map)?;
+    let mut file = File::create("./listr_db.json")?;
+
+    file.write(output.as_bytes())?;
+
+    Ok(())
+}
+
+fn remove_list(list: String) -> Result<(), Box<dyn Error>> {
+    ensure_db_file_exists()?;
+
+    let mut file = File::open("./listr_db.json")?;
+    let mut contents = String::new();
+
+    file.read_to_string(&mut contents)?;
+
+    let mut list_map: HashMap<String, Vec<String>> = serde_json::from_str(&contents)?;
+
+    list_map.remove(&list);
+
+    let mut file = File::create("./listr_db.json")?;
+    let output = serde_json::to_string(&list_map)?;
+
+    file.write(output.as_bytes())?;
+
+    Ok(())
+}
+
+fn remove_item_from_list(list: String, item: String) -> Result<(), Box<dyn Error>> {
+    ensure_db_file_exists()?;
+
+    let mut file = File::open("./listr_db.json")?;
+    let mut contents = String::new();
+
+    file.read_to_string(&mut contents)?;
+
+    let mut list_map: HashMap<String, Vec<String>> = serde_json::from_str(&contents)?;
+
+    match list_map.get_mut(&list) {
+        Some(list_contents) => {
+            let filtered: Vec<String> = list_contents
+                .clone()
+                .into_iter()
+                .filter(|list_item| *list_item != item)
+                .collect();
+
+            *list_contents = filtered;
+        }
+        None => return Ok(()),
+    }
+
+    let mut file = File::create("./listr_db.json")?;
+    let output = serde_json::to_string(&list_map)?;
+
+    file.write(output.as_bytes())?;
+
+    Ok(())
+}
+
+pub fn print_usage() {
+    let usage = "\nlistr usage:
+
+add <list>                 Adds a list.
 add <list> <item>          Adds a new item to a list.
+show <list>                Prints a list to the console.
+remove <list>              Removes a list.
 remove <list> <item>       Removes an item from a list.
 help                       Prints this help message.\n";
 
